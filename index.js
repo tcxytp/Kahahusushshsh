@@ -226,53 +226,69 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
   try {
     const accounts = getSupabaseClients();
     const overviewPromises = accounts.map(async (acc) => {
-      const realFolders = await scanAccountRealFolders(acc);
-      let totalSizeBytes = 0;
-      let totalSongsCount = 0;
-      const folderBreakdown = {};
+      try {
+        const realFolders = await scanAccountRealFolders(acc);
+        let totalSizeBytes = 0;
+        let totalSongsCount = 0;
+        const folderBreakdown = {};
 
-      const folderPromises = realFolders.map(async (folder) => {
-        try {
-          const { data: files } = await acc.client.storage.from(acc.bucket).list(folder, { limit: 1000 });
-          const audioFiles = (files || []).filter(f =>
-            f.name && !f.name.startsWith('.') && f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i)
-          );
+        const folderPromises = realFolders.map(async (folder) => {
+          try {
+            const { data: files } = await acc.client.storage.from(acc.bucket).list(folder, { limit: 1000 });
+            const audioFiles = (files || []).filter(f =>
+              f.name && !f.name.startsWith('.') && f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i)
+            );
 
-          let folderBytes = 0;
-          audioFiles.forEach(f => { folderBytes += f.metadata?.size || 0; });
+            let folderBytes = 0;
+            audioFiles.forEach(f => { folderBytes += f.metadata?.size || 0; });
 
-          return { bytes: folderBytes, count: audioFiles.length, folder };
-        } catch (e) {
-          return { bytes: 0, count: 0, folder };
-        }
-      });
+            return { bytes: folderBytes, count: audioFiles.length, folder };
+          } catch (e) {
+            return { bytes: 0, count: 0, folder };
+          }
+        });
 
-      const folderResults = await Promise.all(folderPromises);
-      folderResults.forEach(resItem => {
-        totalSizeBytes += resItem.bytes;
-        totalSongsCount += resItem.count;
-        folderBreakdown[resItem.folder] = resItem.count;
-      });
+        const folderResults = await Promise.all(folderPromises);
+        folderResults.forEach(resItem => {
+          totalSizeBytes += resItem.bytes;
+          totalSongsCount += resItem.count;
+          folderBreakdown[resItem.folder] = resItem.count;
+        });
 
-      const ONE_GB_BYTES = 1024 * 1024 * 1024;
-      const isFull = totalSizeBytes >= ONE_GB_BYTES;
-      const usedMB = (totalSizeBytes / (1024 * 1024)).toFixed(2);
-      const usedGB = (totalSizeBytes / (1024 * 1024 * 1024)).toFixed(3);
-      const percentUsed = Math.min(100, ((totalSizeBytes / ONE_GB_BYTES) * 100)).toFixed(1);
+        const ONE_GB_BYTES = 1024 * 1024 * 1024;
+        const isFull = totalSizeBytes >= ONE_GB_BYTES;
+        const usedMB = (totalSizeBytes / (1024 * 1024)).toFixed(2);
+        const usedGB = (totalSizeBytes / (1024 * 1024 * 1024)).toFixed(3);
+        const percentUsed = Math.min(100, ((totalSizeBytes / ONE_GB_BYTES) * 100)).toFixed(1);
 
-      return {
-        id: acc.id,
-        name: acc.name,
-        bucket: acc.bucket,
-        totalSongs: totalSongsCount,
-        usedBytes: totalSizeBytes,
-        usedMB: usedMB,
-        usedGB: usedGB,
-        percentUsed: percentUsed,
-        isFull: isFull,
-        folders: realFolders,
-        folderBreakdown: folderBreakdown
-      };
+        return {
+          id: acc.id,
+          name: acc.name,
+          bucket: acc.bucket,
+          totalSongs: totalSongsCount,
+          usedBytes: totalSizeBytes,
+          usedMB: usedMB,
+          usedGB: usedGB,
+          percentUsed: percentUsed,
+          isFull: isFull,
+          folders: realFolders,
+          folderBreakdown: folderBreakdown
+        };
+      } catch (err) {
+        return {
+          id: acc.id,
+          name: acc.name,
+          bucket: acc.bucket,
+          totalSongs: 0,
+          usedBytes: 0,
+          usedMB: "0.00",
+          usedGB: "0.000",
+          percentUsed: "0.0",
+          isFull: false,
+          folders: [],
+          folderBreakdown: {}
+        };
+      }
     });
 
     const overview = await Promise.all(overviewPromises);
