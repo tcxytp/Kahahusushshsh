@@ -4,7 +4,7 @@ import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 
 const app = express();
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: '*', allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'] }));
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -68,7 +68,7 @@ function getSupabaseClients() {
 }
 
 function verifyAdmin(req, res, next) {
-  const authHeader = req.headers['authorization'] || req.headers['x-admin-key'];
+  const authHeader = req.headers['authorization'] || req.headers['x-admin-key'] || req.query.key;
   const key = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
 
   if (key === ADMIN_SECRET_KEY) {
