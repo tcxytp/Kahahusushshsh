@@ -10,7 +10,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'key']
 }));
 app.options('*', cors());
-
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -110,28 +109,28 @@ app.get('/', (req, res) => {
   res.send('Vision Music Admin Engine Live.');
 });
 
-// Robust folder scanner that detects actual folders/playlists in Supabase bucket
+// Scan folders inside the 'songs' bucket
 async function scanAccountRealFolders(acc) {
   try {
     const { data: rootItems, error } = await acc.client.storage
       .from(acc.bucket)
       .list('', { limit: 1000 });
 
-    if (error || !rootItems) return [];
+    if (error || !rootItems) return ["Hindi Songs"];
 
     const detectedFolders = new Set();
     rootItems.forEach(item => {
       if (item.name && !item.name.startsWith('.')) {
-        // In Supabase storage, folders have null id or don't have file extensions
         if (item.id === null || !item.name.includes('.')) {
           detectedFolders.add(item.name.trim());
         }
       }
     });
 
-    return Array.from(detectedFolders);
+    const foldersArray = Array.from(detectedFolders);
+    return foldersArray.length > 0 ? foldersArray : ["Hindi Songs"];
   } catch (err) {
-    return [];
+    return ["Hindi Songs"];
   }
 }
 
@@ -169,25 +168,34 @@ app.get('/songs', async (req, res) => {
     for (const acc of accounts) {
       const folders = await scanAccountRealFolders(acc);
 
-      // If no folders found, check root files
-      if (folders.length === 0) {
+      for (const folder of folders) {
         songPromises.push((async () => {
           try {
-            const { data: rootFiles } = await acc.client.storage
+            const { data: files } = await acc.client.storage
               .from(acc.bucket)
-              .list('', { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+              .list(folder, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
 
-            if (!rootFiles) return [];
+            if (!files || files.length === 0) return [];
 
-            const audio = rootFiles.filter(f => f.name && f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i));
-            return audio.map((file, idx) => {
-              const { data: urlData } = acc.client.storage.from(acc.bucket).getPublicUrl(file.name);
+            const audioFiles = files.filter(f =>
+              f.name && !f.name.startsWith('.') &&
+              f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i)
+            );
+
+            return audioFiles.map((file, idx) => {
+              const filePath = `${folder}/${file.name}`;
+              const { data: urlData } = acc.client.storage
+                .from(acc.bucket)
+                .getPublicUrl(filePath);
+
+              const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').trim();
+
               return {
-                id: `root_${acc.id}_${idx + 1}`,
+                id: `${folder.toLowerCase().replace(/[^a-z0-9]/g, '')}_${acc.id}_${idx + 1}`,
                 fileName: file.name,
-                title: file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').trim(),
+                title: cleanTitle,
                 url: urlData.publicUrl,
-                playlist: "Hindi Songs",
+                playlist: folder,
                 sizeBytes: file.metadata?.size || 0,
                 accountId: acc.id
               };
@@ -196,44 +204,6 @@ app.get('/songs', async (req, res) => {
             return [];
           }
         })());
-      } else {
-        for (const folder of folders) {
-          songPromises.push((async () => {
-            try {
-              const { data: files } = await acc.client.storage
-                .from(acc.bucket)
-                .list(folder, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
-
-              if (!files || files.length === 0) return [];
-
-              const audioFiles = files.filter(f =>
-                f.name && !f.name.startsWith('.') &&
-                f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i)
-              );
-
-              return audioFiles.map((file, idx) => {
-                const filePath = `${folder}/${file.name}`;
-                const { data: urlData } = acc.client.storage
-                  .from(acc.bucket)
-                  .getPublicUrl(filePath);
-
-                const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').trim();
-
-                return {
-                  id: `${folder.toLowerCase().replace(/[^a-z0-9]/g, '')}_${acc.id}_${idx + 1}`,
-                  fileName: file.name,
-                  title: cleanTitle,
-                  url: urlData.publicUrl,
-                  playlist: folder,
-                  sizeBytes: file.metadata?.size || 0,
-                  accountId: acc.id
-                };
-              });
-            } catch (e) {
-              return [];
-            }
-          })());
-        }
       }
     }
 
@@ -317,7 +287,7 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
           usedGB: "0.000",
           percentUsed: "0.0",
           isFull: false,
-          folders: [],
+          folders: ["Hindi Songs"],
           folderBreakdown: {}
         };
       }
