@@ -81,19 +81,6 @@ app.get('/', (req, res) => {
   res.send('Vision Music Admin Engine Live.');
 });
 
-app.get('/ping', async (req, res) => {
-  try {
-    const accounts = getSupabaseClients();
-    const pingPromises = accounts.map(acc => 
-      acc.client.storage.from(acc.bucket).list('', { limit: 1 }).catch(() => null)
-    );
-    await Promise.all(pingPromises);
-    res.status(200).json({ status: 'alive', totalAccountsActive: accounts.length });
-  } catch (err) {
-    res.status(200).json({ status: 'alive_with_notice', error: err.message });
-  }
-});
-
 async function scanAccountRealFolders(acc) {
   try {
     const { data: rootItems, error } = await acc.client.storage
@@ -225,7 +212,6 @@ app.get('/songs', async (req, res) => {
   }
 });
 
-// Admin Login
 app.post('/admin/login', (req, res) => {
   const { password } = req.body;
   const key = (password || '').trim();
@@ -236,7 +222,6 @@ app.post('/admin/login', (req, res) => {
   return res.status(401).json({ success: false, error: 'Incorrect Access Key' });
 });
 
-// Accounts Overview
 app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
   try {
     const accounts = getSupabaseClients();
@@ -297,7 +282,6 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
   }
 });
 
-// Create Playlist
 app.post('/admin/create-playlist', verifyAdmin, async (req, res) => {
   try {
     const { accountId, playlistName } = req.body;
@@ -326,7 +310,6 @@ app.post('/admin/create-playlist', verifyAdmin, async (req, res) => {
   }
 });
 
-// Rename Playlist
 app.post('/admin/rename-playlist', verifyAdmin, async (req, res) => {
   try {
     const { oldPlaylistName, newPlaylistName, accountId } = req.body;
@@ -358,7 +341,6 @@ app.post('/admin/rename-playlist', verifyAdmin, async (req, res) => {
   }
 });
 
-// Delete Playlist
 app.post('/admin/delete-playlist', verifyAdmin, async (req, res) => {
   try {
     const { playlistName, accountId } = req.body;
@@ -384,7 +366,6 @@ app.post('/admin/delete-playlist', verifyAdmin, async (req, res) => {
   }
 });
 
-// Batch Upload
 app.post('/admin/upload', verifyAdmin, upload.array('songFiles', 50), async (req, res) => {
   try {
     const { accountId, playlist } = req.body;
@@ -420,7 +401,6 @@ app.post('/admin/upload', verifyAdmin, upload.array('songFiles', 50), async (req
   }
 });
 
-// Delete Song
 app.post('/admin/delete', verifyAdmin, async (req, res) => {
   try {
     const { accountId, playlist, fileName } = req.body;
@@ -442,7 +422,6 @@ app.post('/admin/delete', verifyAdmin, async (req, res) => {
   }
 });
 
-// Rename Song
 app.post('/admin/rename', verifyAdmin, async (req, res) => {
   try {
     const { accountId, playlist, oldFileName, newTitle } = req.body;
