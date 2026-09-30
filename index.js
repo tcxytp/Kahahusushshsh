@@ -4,7 +4,15 @@ import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 
 const app = express();
-app.use(cors({ origin: '*', allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'] }));
+
+// Comprehensive CORS configuration to allow all requests from any frontend
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'key']
+}));
+app.options('*', cors());
+
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -78,7 +86,6 @@ function getSupabaseClients() {
     }
   });
 
-  // Fallback dummy account if none configured, preventing crash
   if (clients.length === 0 && primaryUrl) {
     clients.push({
       id: 1,
