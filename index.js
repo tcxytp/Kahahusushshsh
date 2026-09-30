@@ -15,25 +15,35 @@ app.use((req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const ADMIN_SECRET_KEY = process.env.ADMIN_SECRET_KEY || 'Vision@Admin7827#Secure';
+const ADMIN_SECRET_KEY = process.env.ADMIN_SECRET_KEY ? process.env.ADMIN_SECRET_KEY.trim().replace(/^["']|["']$/g, '') : 'Vision@Admin7827#Secure';
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
+const cleanVal = (val) => val ? val.trim().replace(/^["']|["']$/g, '') : '';
+
 function getSupabaseClients() {
   const clients = [];
   const registeredUrls = new Set();
 
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
-    clients.push({
-      id: 1,
-      name: "Account 1 (Primary)",
-      client: createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY),
-      bucket: process.env.SUPABASE_BUCKET || 'songs'
-    });
-    registeredUrls.add(process.env.SUPABASE_URL);
+  const primaryUrl = cleanVal(process.env.SUPABASE_URL);
+  const primaryKey = cleanVal(process.env.SUPABASE_KEY);
+  const primaryBucket = cleanVal(process.env.SUPABASE_BUCKET) || 'songs';
+
+  if (primaryUrl && primaryKey) {
+    try {
+      clients.push({
+        id: 1,
+        name: "Account 1 (Primary)",
+        client: createClient(primaryUrl, primaryKey),
+        bucket: primaryBucket
+      });
+      registeredUrls.add(primaryUrl);
+    } catch (e) {
+      console.error("Primary Supabase client init error:", e.message);
+    }
   }
 
   const envKeys = Object.keys(process.env);
@@ -49,27 +59,41 @@ function getSupabaseClients() {
   const sortedIndices = Array.from(detectedIndices).sort((a, b) => a - b);
 
   sortedIndices.forEach(idx => {
-    const url = process.env[`SUPABASE_URL_${idx}`];
-    const key = process.env[`SUPABASE_KEY_${idx}`];
-    const bucket = process.env[`SUPABASE_BUCKET_${idx}`] || process.env.SUPABASE_BUCKET || 'songs';
+    const url = cleanVal(process.env[`SUPABASE_URL_${idx}`]);
+    const key = cleanVal(process.env[`SUPABASE_KEY_${idx}`]);
+    const bucket = cleanVal(process.env[`SUPABASE_BUCKET_${idx}`]) || primaryBucket || 'songs';
 
     if (url && key && !registeredUrls.has(url)) {
-      clients.push({
-        id: idx,
-        name: `Account ${idx}`,
-        client: createClient(url, key),
-        bucket: bucket
-      });
-      registeredUrls.add(url);
+      try {
+        clients.push({
+          id: idx,
+          name: `Account ${idx}`,
+          client: createClient(url, key),
+          bucket: bucket
+        });
+        registeredUrls.add(url);
+      } catch (e) {
+        console.error(`Account ${idx} Supabase client init error:`, e.message);
+      }
     }
   });
+
+  // Fallback dummy account if none configured, preventing crash
+  if (clients.length === 0 && primaryUrl) {
+    clients.push({
+      id: 1,
+      name: "Account 1 (Fallback)",
+      client: createClient(primaryUrl, primaryKey || 'dummy'),
+      bucket: primaryBucket
+    });
+  }
 
   return clients;
 }
 
 function verifyAdmin(req, res, next) {
   const authHeader = req.headers['authorization'] || req.headers['x-admin-key'] || req.query.key;
-  const key = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+  const key = authHeader ? authHeader.replace('Bearer ', '').trim().replace(/^["']|["']$/g, '') : '';
 
   if (key === ADMIN_SECRET_KEY) {
     return next();
@@ -87,7 +111,7 @@ async function scanAccountRealFolders(acc) {
       .from(acc.bucket)
       .list('', { limit: 1000 });
 
-    if (error || !rootItems) return [];
+    if (error || !rootItems) return ["Hindi Song's"];
 
     const detectedFolders = new Set();
     rootItems.forEach(item => {
@@ -98,9 +122,10 @@ async function scanAccountRealFolders(acc) {
       }
     });
 
-    return Array.from(detectedFolders);
+    const foldersArray = Array.from(detectedFolders);
+    return foldersArray.length > 0 ? foldersArray : ["Hindi Song's"];
   } catch (err) {
-    return [];
+    return ["Hindi Song's"];
   }
 }
 
@@ -138,24 +163,34 @@ app.get('/songs', async (req, res) => {
     for (const acc of accounts) {
       const folders = await scanAccountRealFolders(acc);
 
-      if (folders.length === 0) {
+      for (const folder of folders) {
         songPromises.push((async () => {
           try {
-            const { data: rootFiles } = await acc.client.storage
+            const { data: files } = await acc.client.storage
               .from(acc.bucket)
-              .list('', { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+              .list(folder, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
 
-            if (!rootFiles) return [];
+            if (!files || files.length === 0) return [];
 
-            const audio = rootFiles.filter(f => f.name && f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i));
-            return audio.map((file, idx) => {
-              const { data: urlData } = acc.client.storage.from(acc.bucket).getPublicUrl(file.name);
+            const audioFiles = files.filter(f =>
+              f.name && !f.name.startsWith('.') &&
+              f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i)
+            );
+
+            return audioFiles.map((file, idx) => {
+              const filePath = `${folder}/${file.name}`;
+              const { data: urlData } = acc.client.storage
+                .from(acc.bucket)
+                .getPublicUrl(filePath);
+
+              const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').trim();
+
               return {
-                id: `root_${acc.id}_${idx + 1}`,
+                id: `${folder.toLowerCase().replace(/[^a-z0-9]/g, '')}_${acc.id}_${idx + 1}`,
                 fileName: file.name,
-                title: file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').trim(),
+                title: cleanTitle,
                 url: urlData.publicUrl,
-                playlist: "Hindi Song's",
+                playlist: folder,
                 sizeBytes: file.metadata?.size || 0,
                 accountId: acc.id
               };
@@ -164,44 +199,6 @@ app.get('/songs', async (req, res) => {
             return [];
           }
         })());
-      } else {
-        for (const folder of folders) {
-          songPromises.push((async () => {
-            try {
-              const { data: files } = await acc.client.storage
-                .from(acc.bucket)
-                .list(folder, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
-
-              if (!files || files.length === 0) return [];
-
-              const audioFiles = files.filter(f =>
-                f.name && !f.name.startsWith('.') &&
-                f.name.match(/\.(mp3|wav|m4a|aac|ogg|flac)$/i)
-              );
-
-              return audioFiles.map((file, idx) => {
-                const filePath = `${folder}/${file.name}`;
-                const { data: urlData } = acc.client.storage
-                  .from(acc.bucket)
-                  .getPublicUrl(filePath);
-
-                const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ').trim();
-
-                return {
-                  id: `${folder.toLowerCase().replace(/[^a-z0-9]/g, '')}_${acc.id}_${idx + 1}`,
-                  fileName: file.name,
-                  title: cleanTitle,
-                  url: urlData.publicUrl,
-                  playlist: folder,
-                  sizeBytes: file.metadata?.size || 0,
-                  accountId: acc.id
-                };
-              });
-            } catch (e) {
-              return [];
-            }
-          })());
-        }
       }
     }
 
@@ -214,7 +211,7 @@ app.get('/songs', async (req, res) => {
 
 app.post('/admin/login', (req, res) => {
   const { password } = req.body;
-  const key = (password || '').trim();
+  const key = (password || '').trim().replace(/^["']|["']$/g, '');
 
   if (key === ADMIN_SECRET_KEY) {
     return res.json({ success: true, message: 'Authenticated successfully' });
@@ -285,7 +282,7 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
           usedGB: "0.000",
           percentUsed: "0.0",
           isFull: false,
-          folders: [],
+          folders: ["Hindi Song's"],
           folderBreakdown: {}
         };
       }
