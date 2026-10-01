@@ -46,9 +46,7 @@ function getSupabaseClients() {
         bucket: primaryBucket
       });
       registeredUrls.add(primaryUrl);
-    } catch (e) {
-      console.error("Primary Supabase client init error:", e.message);
-    }
+    } catch (e) {}
   }
 
   const envKeys = Object.keys(process.env);
@@ -77,20 +75,9 @@ function getSupabaseClients() {
           bucket: bucket
         });
         registeredUrls.add(url);
-      } catch (e) {
-        console.error(`Account ${idx} Supabase client init error:`, e.message);
-      }
+      } catch (e) {}
     }
   });
-
-  if (clients.length === 0 && primaryUrl) {
-    clients.push({
-      id: 1,
-      name: "Account 1 (Fallback)",
-      client: createClient(primaryUrl, primaryKey || 'dummy'),
-      bucket: primaryBucket
-    });
-  }
 
   return clients;
 }
@@ -109,14 +96,13 @@ app.get('/', (req, res) => {
   res.send('Vision Music Admin Engine Live.');
 });
 
-// Scan folders inside the 'songs' bucket
 async function scanAccountRealFolders(acc) {
   try {
     const { data: rootItems, error } = await acc.client.storage
       .from(acc.bucket)
       .list('', { limit: 1000 });
 
-    if (error || !rootItems) return ["Hindi Songs"];
+    if (error || !rootItems) return [];
 
     const detectedFolders = new Set();
     rootItems.forEach(item => {
@@ -127,10 +113,9 @@ async function scanAccountRealFolders(acc) {
       }
     });
 
-    const foldersArray = Array.from(detectedFolders);
-    return foldersArray.length > 0 ? foldersArray : ["Hindi Songs"];
+    return Array.from(detectedFolders);
   } catch (err) {
-    return ["Hindi Songs"];
+    return [];
   }
 }
 
@@ -153,7 +138,6 @@ app.get('/playlists', async (req, res) => {
     });
 
     let list = Array.from(seenMap.values());
-    if (list.length === 0) list.push("Hindi Songs");
     res.json(list);
   } catch (err) {
     res.status(500).json({ error: 'Could not fetch playlists' });
@@ -287,7 +271,7 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
           usedGB: "0.000",
           percentUsed: "0.0",
           isFull: false,
-          folders: ["Hindi Songs"],
+          folders: [],
           folderBreakdown: {}
         };
       }
@@ -295,6 +279,104 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
 
     const overview = await Promise.all(overviewPromises);
     res.json({ success: true, accounts: overview });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Helper to check existing song across all accounts
+async function checkDuplicateSongAcrossAllAccounts(accounts, fileName) {
+  const cleanTarget = fileName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const acc of accounts) {
+    const folders = await scanAccountRealFolders(acc);
+    for (const folder of folders) {
+      try {
+        const { data: files } = await acc.client.storage.from(acc.bucket).list(folder, { limit: 1000 });
+        if (files) {
+          for (const f of files) {
+            const existingClean = f.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (existingClean === cleanTarget) {
+              return true; // Duplicate found
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  }
+  return false;
+}
+
+app.post('/admin/upload', verifyAdmin, upload.array('songFiles', 50), async (req, res) => {
+  try {
+    const { accountId, playlist } = req.body;
+    const files = req.files;
+
+    if (!files || files.length === 0 || !playlist) {
+      return res.status(400).json({ success: false, error: 'Files and Playlist are required' });
+    }
+
+    const accounts = getSupabaseClients();
+    let targetAcc = accountId ? accounts.find(a => a.id === parseInt(accountId, 10)) : accounts[0];
+    if (!targetAcc) targetAcc = accounts[0];
+
+    let uploadedCount = 0;
+    let skippedCount = 0;
+
+    for (const file of files) {
+      const cleanBaseName = file.originalname.replace(/\.[^/.]+$/, '').trim().replace(/[/\\?%*:|"<>]/g, '');
+      const cleanFileName = `${cleanBaseName}.mp3`;
+
+      // Check duplicate across all accounts
+      const isDuplicate = await checkDuplicateSongAcrossAllAccounts(accounts, cleanFileName);
+      if (isDuplicate) {
+        skippedCount++;
+        continue; // Skip duplicate song
+      }
+
+      const targetFilePath = `${playlist}/${cleanFileName}`;
+      const { error } = await targetAcc.client.storage
+        .from(targetAcc.bucket)
+        .upload(targetFilePath, file.buffer, { contentType: file.mimetype || 'audio/mpeg', upsert: false });
+
+      if (!error) uploadedCount++;
+    }
+
+    res.json({
+      success: true,
+      message: `Uploaded ${uploadedCount} new songs successfully! (${skippedCount} duplicates skipped).`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Replace Song
+app.post('/admin/replace-song', verifyAdmin, upload.single('songFile'), async (req, res) => {
+  try {
+    const { accountId, playlist, oldFileName } = req.body;
+    const file = req.file;
+
+    if (!playlist || !oldFileName || !file) {
+      return res.status(400).json({ success: false, error: 'Missing parameters for replacement' });
+    }
+
+    const accounts = getSupabaseClients();
+    let targetAcc = accountId ? accounts.find(a => a.id === parseInt(accountId, 10)) : accounts[0];
+    if (!targetAcc) targetAcc = accounts[0];
+
+    const oldFilePath = `${playlist}/${oldFileName}`;
+    await targetAcc.client.storage.from(targetAcc.bucket).remove([oldFilePath]);
+
+    const targetFilePath = `${playlist}/${oldFileName}`;
+    const { error } = await targetAcc.client.storage
+      .from(targetAcc.bucket)
+      .upload(targetFilePath, file.buffer, { contentType: file.mimetype || 'audio/mpeg', upsert: true });
+
+    if (!error) {
+      res.json({ success: true, message: `Song replaced successfully!` });
+    } else {
+      res.status(500).json({ success: false, error: error.message });
+    }
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -312,14 +394,12 @@ app.post('/admin/create-playlist', verifyAdmin, async (req, res) => {
     const acc = accounts.find(a => a.id === parseInt(accountId, 10)) || accounts[0];
 
     const placeholderPath = `${cleanFolder}/.init`;
-    const emptyBuf = Buffer.from('vision-folder-manifest');
-
     const { error } = await acc.client.storage
       .from(acc.bucket)
-      .upload(placeholderPath, emptyBuf, { upsert: true });
+      .upload(placeholderPath, Buffer.from('vision-folder-manifest'), { upsert: true });
 
     if (!error) {
-      res.json({ success: true, message: `Playlist "${cleanFolder}" created successfully!` });
+      res.json({ success: true, message: `Playlist "${cleanFolder}" ready/merged successfully!` });
     } else {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -347,9 +427,6 @@ app.post('/admin/rename-playlist', verifyAdmin, async (req, res) => {
           const newPath = `${cleanNewName}/${file.name}`;
           await acc.client.storage.from(acc.bucket).move(oldPath, newPath);
         }
-      } else {
-        await acc.client.storage.from(acc.bucket).upload(`${cleanNewName}/.init`, Buffer.from('vision-folder-manifest'), { upsert: true });
-        await acc.client.storage.from(acc.bucket).remove([`${oldPlaylistName}/.init`]);
       }
     }
 
@@ -375,45 +452,9 @@ app.post('/admin/delete-playlist', verifyAdmin, async (req, res) => {
         const filePaths = files.map(f => `${playlistName}/${f.name}`);
         await acc.client.storage.from(acc.bucket).remove(filePaths);
       }
-      await acc.client.storage.from(acc.bucket).remove([`${playlistName}/.init`]);
     }
 
     res.json({ success: true, message: `Playlist deleted successfully!` });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/admin/upload', verifyAdmin, upload.array('songFiles', 50), async (req, res) => {
-  try {
-    const { accountId, playlist } = req.body;
-    const files = req.files;
-
-    if (!files || files.length === 0 || !playlist) {
-      return res.status(400).json({ success: false, error: 'Files and Playlist are required' });
-    }
-
-    const accounts = getSupabaseClients();
-    let targetAcc = accountId ? accounts.find(a => a.id === parseInt(accountId, 10)) : accounts[0];
-    if (!targetAcc) targetAcc = accounts[0];
-
-    let uploadedCount = 0;
-    for (const file of files) {
-      const cleanBaseName = file.originalname.replace(/\.[^/.]+$/, '').trim().replace(/[/\\?%*:|"<>]/g, '');
-      const cleanFileName = `${cleanBaseName}.mp3`;
-      const targetFilePath = `${playlist}/${cleanFileName}`;
-
-      const { error } = await targetAcc.client.storage
-        .from(targetAcc.bucket)
-        .upload(targetFilePath, file.buffer, { contentType: file.mimetype || 'audio/mpeg', upsert: true });
-
-      if (!error) uploadedCount++;
-    }
-
-    res.json({
-      success: true,
-      message: `Uploaded ${uploadedCount} songs successfully!`
-    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
