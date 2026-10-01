@@ -29,6 +29,7 @@ const upload = multer({
 
 const cleanVal = (val) => val ? val.trim().replace(/^["']|["']$/g, '') : '';
 
+// Unlimited dynamic accounts loader supporting any number of indices (1, 2, 3... 50+)
 function getSupabaseClients() {
   const clients = [];
   const registeredUrls = new Set();
@@ -59,6 +60,7 @@ function getSupabaseClients() {
     }
   });
 
+  // Sort indices numerically so accounts load in proper sequence (1, 2, 3... 13...)
   const sortedIndices = Array.from(detectedIndices).sort((a, b) => a - b);
 
   sortedIndices.forEach(idx => {
@@ -284,7 +286,6 @@ app.get('/admin/accounts-overview', verifyAdmin, async (req, res) => {
   }
 });
 
-// Helper to check existing song across all accounts
 async function checkDuplicateSongAcrossAllAccounts(accounts, fileName) {
   const cleanTarget = fileName.toLowerCase().replace(/[^a-z0-9]/g, '');
   for (const acc of accounts) {
@@ -296,7 +297,7 @@ async function checkDuplicateSongAcrossAllAccounts(accounts, fileName) {
           for (const f of files) {
             const existingClean = f.name.toLowerCase().replace(/[^a-z0-9]/g, '');
             if (existingClean === cleanTarget) {
-              return true; // Duplicate found
+              return true;
             }
           }
         }
@@ -326,11 +327,10 @@ app.post('/admin/upload', verifyAdmin, upload.array('songFiles', 50), async (req
       const cleanBaseName = file.originalname.replace(/\.[^/.]+$/, '').trim().replace(/[/\\?%*:|"<>]/g, '');
       const cleanFileName = `${cleanBaseName}.mp3`;
 
-      // Check duplicate across all accounts
       const isDuplicate = await checkDuplicateSongAcrossAllAccounts(accounts, cleanFileName);
       if (isDuplicate) {
         skippedCount++;
-        continue; // Skip duplicate song
+        continue;
       }
 
       const targetFilePath = `${playlist}/${cleanFileName}`;
@@ -350,7 +350,6 @@ app.post('/admin/upload', verifyAdmin, upload.array('songFiles', 50), async (req
   }
 });
 
-// Replace Song
 app.post('/admin/replace-song', verifyAdmin, upload.single('songFile'), async (req, res) => {
   try {
     const { accountId, playlist, oldFileName } = req.body;
